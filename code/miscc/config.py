@@ -16,6 +16,7 @@ __C.DATA_DIR = ''
 __C.GPU_ID = '0'
 __C.CUDA = True
 __C.WORKERS = 6
+__C.N_GPUS = 1
 
 __C.RNN_TYPE = 'LSTM'   # 'GRU'
 __C.B_VALIDATION = False
@@ -29,6 +30,7 @@ __C.TREE.INDEX = 1
 # Training options
 __C.TRAIN = edict()
 __C.TRAIN.BATCH_SIZE = 64
+__C.TRAIN.BATCH_SIZE_PER_GPU = 8
 __C.TRAIN.MAX_EPOCH = 600
 __C.TRAIN.SNAPSHOT_INTERVAL = 2000
 __C.TRAIN.DISCRIMINATOR_LR = 2e-4

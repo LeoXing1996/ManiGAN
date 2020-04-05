@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
-import torch.nn.parallel
+import torch.nn.parallel as parallel
+from torch.nn.parallel import data_parallel
 from torch.autograd import Variable
 from torchvision import models
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
+from torch.nn import SyncBatchNorm
 
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
@@ -12,6 +14,7 @@ from miscc.config import cfg
 from attention import SpatialAttentionGeneral as SPATIAL_ATT
 from attention import ChannelAttention as CHANNEL_ATT
 from attention import DCMChannelAttention as DCM_CHANNEL_ATT
+
 
 class GLU(nn.Module):
     def __init__(self):
@@ -23,8 +26,9 @@ class GLU(nn.Module):
         nc = int(nc/2)
         return x[:, :nc] * F.sigmoid(x[:, nc:])
 
+
 # The implementation of ACM (affine combination module)
-class ACM(nn.Module): 
+class ACM(nn.Module):
     def __init__(self, channel_num):
         super(ACM, self).__init__()
         self.conv = conv3x3(cfg.GAN.GF_DIM, 128)
@@ -67,6 +71,7 @@ def imgUpBlock(in_planes, out_planes):
         nn.InstanceNorm2d(out_planes * 2),
         GLU())
     return block
+
 
 # Keep the spatial size
 def Block3x3_relu(in_planes, out_planes):
@@ -183,6 +188,7 @@ class RNN_ENCODER(nn.Module):
             sent_emb = hidden.transpose(0, 1).contiguous()
         sent_emb = sent_emb.view(-1, self.nhidden * self.num_directions)
         return words_emb, sent_emb
+
 
 # The image encoder (Inception_v3)
 class CNN_ENCODER(nn.Module):
@@ -329,20 +335,53 @@ class CA_NET(nn.Module):
         return c_code, mu, logvar
 
 
+class unseq2D(nn.Module):
+    def __init__(self, ):
+        super(unseq2D, self).__init__()
+
+    def forward(self, x):
+        assert x.dim() == 2
+        return x.view(*x.size(), 1, 1)
+
+    def __repr__(self):
+        print('Unsqueeze 2d tensor to 4d in order to fit syncBN')
+
+
+class seq2D(nn.Module):
+    def __init__(self, ):
+        super(seq2D, self).__init__()
+
+    def forward(self, x):
+        assert x.dim() == 4
+        return x.view(x.size(0), x.size(1))
+
+    def __repr__(self):
+        print('Squeeze 4d tensor output from syncBN to 2d')
+
+
 class INIT_STAGE_G(nn.Module):
     def __init__(self, ngf, ncf):
         super(INIT_STAGE_G, self).__init__()
         self.gf_dim = ngf
-        self.in_dim = cfg.GAN.Z_DIM + ncf + cfg.TEXT.EMBEDDING_DIM  
+        self.in_dim = cfg.GAN.Z_DIM + ncf + cfg.TEXT.EMBEDDING_DIM
+        self.syncBN = True if cfg.N_GPUS > 1 else False
 
         self.define_module()
 
     def define_module(self):
         nz, ngf = self.in_dim, self.gf_dim
-        self.fc = nn.Sequential(
-            nn.Linear(nz, ngf * 4 * 4 * 2, bias=False),
-            nn.BatchNorm1d(ngf * 4 * 4 * 2),
-            GLU())
+        if self.syncBN:
+            self.fc = nn.Sequential(
+                nn.Linear(nz, ngf * 4 * 4 * 2, bias=False),
+                unseq2D(),
+                nn.SyncBatchNorm(ngf * 4 * 4 * 2),
+                seq2D(),
+                GLU())
+        else:
+            self.fc = nn.Sequential(
+                nn.Linear(nz, ngf * 4 * 4 * 2, bias=False),
+                nn.BatchNorm1d(ngf * 4 * 4 * 2),
+                GLU())
 
         self.upsample1 = upBlock(ngf, ngf // 2)
         self.upsample2 = upBlock(ngf // 2, ngf // 4)
@@ -455,6 +494,7 @@ class G_NET(nn.Module):
             self.img_net3 = GET_IMAGE_G(ngf)
             self.SAIN3 = ACM(ngf)
             self.imgUpSample3 = upBlock(ngf, ngf)
+
     def forward(self, z_code, sent_emb, word_embs, mask, cnn_code, region_features):
         """
             :param z_code: batch x cfg.GAN.Z_DIM
@@ -484,7 +524,7 @@ class G_NET(nn.Module):
         if cfg.TREE.BRANCH_NUM > 2:
             h_code3, att2 = \
                 self.h_net3(h_code2, c_code, word_embs, mask, img_code128)
-            img_code256 = self.imgUpSample3(img_code128)            
+            img_code256 = self.imgUpSample3(img_code128)
             h_code_img3 = self.SAIN3(h_code3, img_code256)
             fake_img3 = self.img_net3(h_code_img3)
             fake_imgs.append(fake_img3)
@@ -493,6 +533,7 @@ class G_NET(nn.Module):
 
         # The output "h_code3" and "c_code" are used in the DCM
         return fake_imgs, att_maps, mu, logvar, h_code3, c_code
+
 
 class DCM_NEXT_STAGE(nn.Module):
     def __init__(self, ngf, nef, ncf):
@@ -538,13 +579,14 @@ class DCM_NEXT_STAGE(nn.Module):
 
         return out_code
 
+
 # the DCM (detail correction module)
 class DCM_Net(nn.Module):
     def __init__(self):
         super(DCM_Net, self).__init__()
         ngf = cfg.GAN.GF_DIM
         nef = cfg.TEXT.EMBEDDING_DIM
-        ncf = cfg.GAN.CONDITION_DIM      
+        ncf = cfg.GAN.CONDITION_DIM
         # ngf, nef, ncf: 32 256 100
         self.img_net = GET_IMAGE_G(ngf)
         self.h_net = DCM_NEXT_STAGE(ngf, nef, ncf)
@@ -559,6 +601,7 @@ class DCM_Net(nn.Module):
         fake_img = self.img_net(h_a_r_code)
 
         return fake_img
+
 
 class G_DCGAN(nn.Module):
     def __init__(self):
@@ -606,6 +649,7 @@ def Block3x3_leakRelu(in_planes, out_planes):
     block = nn.Sequential(
         conv3x3(in_planes, out_planes),
         nn.BatchNorm2d(out_planes),
+        # SyncBatchNorm(out_planes),
         nn.LeakyReLU(0.2, inplace=True)
     )
     return block
@@ -616,6 +660,7 @@ def downBlock(in_planes, out_planes):
     block = nn.Sequential(
         nn.Conv2d(in_planes, out_planes, 4, 2, 1, bias=False),
         nn.BatchNorm2d(out_planes),
+        # SyncBatchNorm(out_planes),
         nn.LeakyReLU(0.2, inplace=True)
     )
     return block
@@ -630,14 +675,17 @@ def encode_image_by_16times(ndf):
         # --> state size 2ndf x x in_size/4 x in_size/4
         nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
         nn.BatchNorm2d(ndf * 2),
+        # SyncBatchNorm(ndf * 2),
         nn.LeakyReLU(0.2, inplace=True),
         # --> state size 4ndf x in_size/8 x in_size/8
         nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
         nn.BatchNorm2d(ndf * 4),
+        # SyncBatchNorm(ndf * 4),
         nn.LeakyReLU(0.2, inplace=True),
         # --> state size 8ndf x in_size/16 x in_size/16
         nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
         nn.BatchNorm2d(ndf * 8),
+        # SyncBatchNorm(ndf * 8),
         nn.LeakyReLU(0.2, inplace=True)
     )
     return encode_img
@@ -689,6 +737,54 @@ class D_NET64(nn.Module):
         x_code4 = self.img_code_s16(x_var)  # 4 x 4 x 8df
         return x_code4
 
+    def forward(self, *inputs, target='feat'):
+        assert target in ['feat', 'D', 'G']
+        if target == 'feat':
+            x_code4 = self.img_code_s16(*inputs)  # 4 x 4 x 8df
+            return x_code4
+        getLoss = self.forward_D if target == 'D' else self.forward_G
+        loss = getLoss(*inputs)
+        return loss
+
+    def forward_D(self, real_imgs, fake_imgs,
+                  conditions, real_labels, fake_labels,):
+        real_features = self.forward(real_imgs)
+        fake_features = self.forward(fake_imgs.detach())
+        # loss
+        cond_real_logits = self.COND_DNET(real_features, conditions)
+        cond_real_errD = nn.BCELoss()(cond_real_logits, real_labels)
+        cond_fake_logits = self.COND_DNET(fake_features, conditions)
+        cond_fake_errD = nn.BCELoss()(cond_fake_logits, fake_labels)
+        #
+        batch_size = real_features.size(0)
+        cond_wrong_logits = self.COND_DNET(real_features[:(batch_size - 1)],
+                                           conditions[1:batch_size])
+        cond_wrong_errD = nn.BCELoss()(cond_wrong_logits,
+                                       fake_labels[1:batch_size])
+
+        if self.UNCOND_DNET is not None:
+            real_logits = self.UNCOND_DNET(real_features)
+            fake_logits = self.UNCOND_DNET(fake_features)
+            real_errD = nn.BCELoss()(real_logits, real_labels)
+            fake_errD = nn.BCELoss()(fake_logits, fake_labels)
+            errD = ((real_errD + cond_real_errD) / 2. +
+                    (fake_errD + cond_fake_errD + cond_wrong_errD) / 3.)
+        else:
+            errD = cond_real_errD + (cond_fake_errD + cond_wrong_errD) / 2.
+        return errD
+
+    def forward_G(self, fake_imgs, real_labels, sent_emb):
+        features = self.forward(fake_imgs)
+        cond_logits = self.COND_DNET(features, sent_emb)
+        cond_errG = nn.BCELoss()(cond_logits, real_labels)
+        if self.UNCOND_DNET is not None:
+            logits = self.UNCOND_DNET(features)
+            errG = nn.BCELoss()(logits, real_labels)
+            g_loss = errG + cond_errG
+        else:
+            g_loss = cond_errG
+        return g_loss
+
 
 # For 128 x 128 images
 class D_NET128(nn.Module):
@@ -711,6 +807,56 @@ class D_NET128(nn.Module):
         x_code4 = self.img_code_s32(x_code8)    # 4 x 4 x 16df
         x_code4 = self.img_code_s32_1(x_code4)  # 4 x 4 x 8df
         return x_code4
+
+    def forward(self, *inputs, target='feat'):
+        assert target in ['feat', 'D', 'G']
+        if target == 'feat':
+            x_code8 = self.img_code_s16(*inputs)      # 8 x 8 x 8df
+            x_code4 = self.img_code_s32(x_code8)    # 4 x 4 x 16df
+            x_code4 = self.img_code_s32_1(x_code4)  # 4 x 4 x 8df
+            return x_code4
+        getLoss = self.forward_D if target == 'D' else self.forward_G
+        loss = getLoss(*inputs)
+        return loss
+
+    def forward_D(self, real_imgs, fake_imgs,
+                  conditions, real_labels, fake_labels,):
+        real_features = self.forward(real_imgs)
+        fake_features = self.forward(fake_imgs.detach())
+        # loss
+        cond_real_logits = self.COND_DNET(real_features, conditions)
+        cond_real_errD = nn.BCELoss()(cond_real_logits, real_labels)
+        cond_fake_logits = self.COND_DNET(fake_features, conditions)
+        cond_fake_errD = nn.BCELoss()(cond_fake_logits, fake_labels)
+        #
+        batch_size = real_features.size(0)
+        cond_wrong_logits = self.COND_DNET(real_features[:(batch_size - 1)],
+                                           conditions[1:batch_size])
+        cond_wrong_errD = nn.BCELoss()(cond_wrong_logits,
+                                       fake_labels[1:batch_size])
+
+        if self.UNCOND_DNET is not None:
+            real_logits = self.UNCOND_DNET(real_features)
+            fake_logits = self.UNCOND_DNET(fake_features)
+            real_errD = nn.BCELoss()(real_logits, real_labels)
+            fake_errD = nn.BCELoss()(fake_logits, fake_labels)
+            errD = ((real_errD + cond_real_errD) / 2. +
+                    (fake_errD + cond_fake_errD + cond_wrong_errD) / 3.)
+        else:
+            errD = cond_real_errD + (cond_fake_errD + cond_wrong_errD) / 2.
+        return errD
+
+    def forward_G(self, fake_imgs, real_labels, sent_emb):
+        features = self.forward(fake_imgs)
+        cond_logits = self.COND_DNET(features, sent_emb)
+        cond_errG = nn.BCELoss()(cond_logits, real_labels)
+        if self.UNCOND_DNET is not None:
+            logits = self.UNCOND_DNET(features)
+            errG = nn.BCELoss()(logits, real_labels)
+            g_loss = errG + cond_errG
+        else:
+            g_loss = cond_errG
+        return g_loss
 
 
 # For 256 x 256 images
@@ -737,3 +883,55 @@ class D_NET256(nn.Module):
         x_code4 = self.img_code_s64_1(x_code4)
         x_code4 = self.img_code_s64_2(x_code4)
         return x_code4
+
+    def forward(self, *inputs, target='feat'):
+        assert target in ['feat', 'D', 'G']
+        if target == 'feat':
+            x_code16 = self.img_code_s16(*inputs)
+            x_code8 = self.img_code_s32(x_code16)
+            x_code4 = self.img_code_s64(x_code8)
+            x_code4 = self.img_code_s64_1(x_code4)
+            x_code4 = self.img_code_s64_2(x_code4)
+            return x_code4
+        getLoss = self.forward_D if target == 'D' else self.forward_G
+        loss = getLoss(*inputs)
+        return loss
+
+    def forward_D(self, real_imgs, fake_imgs,
+                  conditions, real_labels, fake_labels,):
+        real_features = self.forward(real_imgs)
+        fake_features = self.forward(fake_imgs.detach())
+        # loss
+        cond_real_logits = self.COND_DNET(real_features, conditions)
+        cond_real_errD = nn.BCELoss()(cond_real_logits, real_labels)
+        cond_fake_logits = self.COND_DNET(fake_features, conditions)
+        cond_fake_errD = nn.BCELoss()(cond_fake_logits, fake_labels)
+        #
+        batch_size = real_features.size(0)
+        cond_wrong_logits = self.COND_DNET(real_features[:(batch_size - 1)],
+                                           conditions[1:batch_size])
+        cond_wrong_errD = nn.BCELoss()(cond_wrong_logits,
+                                       fake_labels[1:batch_size])
+
+        if self.UNCOND_DNET is not None:
+            real_logits = self.UNCOND_DNET(real_features)
+            fake_logits = self.UNCOND_DNET(fake_features)
+            real_errD = nn.BCELoss()(real_logits, real_labels)
+            fake_errD = nn.BCELoss()(fake_logits, fake_labels)
+            errD = ((real_errD + cond_real_errD) / 2. +
+                    (fake_errD + cond_fake_errD + cond_wrong_errD) / 3.)
+        else:
+            errD = cond_real_errD + (cond_fake_errD + cond_wrong_errD) / 2.
+        return errD
+
+    def forward_G(self, fake_imgs, real_labels, sent_emb):
+        features = self.forward(fake_imgs)
+        cond_logits = self.COND_DNET(features, sent_emb)
+        cond_errG = nn.BCELoss()(cond_logits, real_labels)
+        if self.UNCOND_DNET is not None:
+            logits = self.UNCOND_DNET(features)
+            errG = nn.BCELoss()(logits, real_labels)
+            g_loss = errG + cond_errG
+        else:
+            g_loss = cond_errG
+        return g_loss

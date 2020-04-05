@@ -3,6 +3,7 @@ from __future__ import print_function
 from miscc.config import cfg, cfg_from_file
 from datasets import TextDataset
 from trainer import condGANTrainer as trainer
+import torch.backends.cudnn as cudnn
 
 import os
 import sys
@@ -32,8 +33,12 @@ def parse_args():
     parser.add_argument('--gpu', dest='gpu_id', type=int, default=-1)
     parser.add_argument('--data_dir', dest='data_dir', type=str, default='')
     parser.add_argument('--manualSeed', type=int, help='manual seed')
+    parser.add_argument('--name', type=str, help='name for output dir')
+    parser.add_argument('--bz', type=int, help='batch size for training')
+    parser.add_argument('--epoch', type=int, help='max epoch for training')
     args = parser.parse_args()
     return args
+
 
 def get_imgs(img_path, imsize, flip, x, y, bbox=None,
              transform=None, normalize=None):
@@ -51,7 +56,7 @@ def get_imgs(img_path, imsize, flip, x, y, bbox=None,
 
     if transform is not None:
         img = transform(img)
-        ## crop
+        # crop
         img = img.crop([x, y, x + 256, y + 256])
         if flip:
             img = F.hflip(img)
@@ -68,6 +73,7 @@ def get_imgs(img_path, imsize, flip, x, y, bbox=None,
             ret.append(normalize(re_img))
 
     return ret
+
 
 def gen_example(wordtoix, algo, imsize, image_transform, norm, data_dir):
     '''generate images from example sentences'''
@@ -88,7 +94,7 @@ def gen_example(wordtoix, algo, imsize, image_transform, norm, data_dir):
             img_name = name.replace("text", "images")
             img_path = '%s/%s.jpg' % (data_dir, img_name)
             imgs = get_imgs(img_path, imsize, flip, x, y,
-                        None, image_transform, norm)
+                            None, image_transform, norm)
 
             real_imgs = []
             for i in range(len(imgs)):
@@ -149,6 +155,14 @@ if __name__ == "__main__":
 
     if args.data_dir != '':
         cfg.DATA_DIR = args.data_dir
+
+    if args.bz is not None:
+        cfg.TRAIN.BATCH_SIZE = args.bz
+        pass
+
+    if args.epoch is not None:
+        cfg.TRAIN.MAX_EPOCH = args.epoch
+
     print('Using config:')
     pprint.pprint(cfg)
 
@@ -161,11 +175,16 @@ if __name__ == "__main__":
     torch.manual_seed(args.manualSeed)
     if cfg.CUDA:
         torch.cuda.manual_seed_all(args.manualSeed)
+        cudnn.deterministic = True
 
     now = datetime.datetime.now(dateutil.tz.tzlocal())
     timestamp = now.strftime('%Y_%m_%d_%H_%M_%S')
-    output_dir = '../output/%s_%s_%s' % \
-        (cfg.DATASET_NAME, cfg.CONFIG_NAME, timestamp)
+    if args.name is None:
+        output_dir = '../output/%s_%s_%s' % \
+                     (cfg.DATASET_NAME, cfg.CONFIG_NAME, timestamp)
+    else:
+        output_dir = '../output/%s_%s_%s_%s' % \
+                     (cfg.DATASET_NAME, cfg.CONFIG_NAME, args.name, timestamp)
 
     split_dir, bshuffle = 'train', True
     if not cfg.TRAIN.FLAG:
@@ -176,7 +195,7 @@ if __name__ == "__main__":
 
     image_transform = transforms.Compose([
         transforms.Scale(int(imsize * 76 / 64))])
-   
+
     dataset = TextDataset(cfg.DATA_DIR, split_dir,
                           base_size=cfg.TREE.BASE_SIZE,
                           transform=image_transform)

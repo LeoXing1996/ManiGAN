@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import torchvision.models as models
 from torch.autograd import Variable
 
+
 def cosine_similarity(x1, x2, dim=1, eps=1e-8):
     """Returns cosine similarity between x1 and x2, computed along dim.
     """
@@ -114,10 +115,12 @@ def words_loss(img_features, words_emb, labels,
         loss0, loss1 = None, None
     return loss0, loss1, att_maps
 
+
 # ################## Loss for G and Ds ##############################
 def discriminator_loss(netD, real_imgs, fake_imgs, conditions,
-                       real_labels, fake_labels, words_embs, cap_lens, image_encoder, class_ids,
-                        w_words_embs, wrong_caps_len, wrong_cls_id):
+                       real_labels, fake_labels, words_embs, cap_lens,
+                       image_encoder, class_ids,
+                       w_words_embs, wrong_caps_len, wrong_cls_id):
 
     real_features = netD(real_imgs)
     fake_features = netD(fake_imgs.detach())
@@ -128,8 +131,10 @@ def discriminator_loss(netD, real_imgs, fake_imgs, conditions,
     cond_fake_errD = nn.BCELoss()(cond_fake_logits, fake_labels)
     #
     batch_size = real_features.size(0)
-    cond_wrong_logits = netD.COND_DNET(real_features[:(batch_size - 1)], conditions[1:batch_size])
-    cond_wrong_errD = nn.BCELoss()(cond_wrong_logits, fake_labels[1:batch_size])
+    cond_wrong_logits = netD.COND_DNET(real_features[:(batch_size - 1)],
+                                       conditions[1:batch_size])
+    cond_wrong_errD = nn.BCELoss()(cond_wrong_logits,
+                                   fake_labels[1:batch_size])
 
     if netD.UNCOND_DNET is not None:
         real_logits = netD.UNCOND_DNET(real_features)
@@ -163,13 +168,13 @@ def generator_loss(netsD, image_encoder, fake_imgs, real_labels,
     # Forward
     errG_total = 0
     feature_loss = 0
-    ## numDs: 3
+    # numDs: 3
     for i in range(numDs):
 
         features = netsD[i](fake_imgs[i])
         cond_logits = netsD[i].COND_DNET(features, sent_emb)
         cond_errG = nn.BCELoss()(cond_logits, real_labels)
-        if netsD[i].UNCOND_DNET is  not None:
+        if netsD[i].UNCOND_DNET is not None:
             logits = netsD[i].UNCOND_DNET(features)
             errG = nn.BCELoss()(logits, real_labels)
             g_loss = errG + cond_errG
@@ -206,11 +211,12 @@ def generator_loss(netsD, image_encoder, fake_imgs, real_labels,
         for i in range(len(real_features)):
             cur_real_features = real_features[i]
             cur_fake_features = fake_features[i]
-            feature_loss += F.mse_loss(cur_real_features, cur_fake_features) 
+            feature_loss += F.mse_loss(cur_real_features, cur_fake_features)
 
     errG_total += feature_loss / 3.
 
     return errG_total, logs
+
 
 def DCM_generator_loss(netD, image_encoder, fake_img, real_labels,
                    words_embs, sent_emb, match_labels,
@@ -284,9 +290,9 @@ def word_level_correlation(img_features, words_emb,
         words_num = cap_lens[i]
         word = words_emb[i, :, :words_num].unsqueeze(0).contiguous()
         context = img_features[i, :, :, :].unsqueeze(0).contiguous()
-        
+
         weiContext, attn = func_attention(word, context, cfg.TRAIN.SMOOTH.GAMMA1)
-        
+
         aver = torch.mean(word,2)
         averT = aver.unsqueeze(1)
         res_word = torch.bmm(averT, word)
@@ -307,7 +313,7 @@ def word_level_correlation(img_features, words_emb,
         row_sim = row_sim.sum(dim=1, keepdim=True)
         row_sim = torch.log(row_sim)
         similar_list.append(F.sigmoid(row_sim[0,0]))
-        
+
     similar_list = torch.tensor(similar_list, requires_grad=False).cuda()
     result = nn.BCELoss()(similar_list, labels)
 

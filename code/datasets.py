@@ -53,7 +53,7 @@ def prepare_data(data):
         captions = Variable(captions)
         sorted_cap_lens = Variable(sorted_cap_lens)
 
-    ## 
+    ##
     w_sorted_cap_lens, w_sorted_cap_indices = \
         torch.sort(wrong_caps_len, 0, True)
 
@@ -108,8 +108,9 @@ def get_imgs(img_path, imsize, flip, x, y, bbox=None,
 
 class TextDataset(data.Dataset):
     def __init__(self, data_dir, split='train',
-                 base_size=64,
-                 transform=None, target_transform=None):
+                 base_size=64, transform=None,
+                 target_transform=None, rank=-1):
+        self.stdout = (rank == -1 or rank == 0)
         self.transform = transform
         self.norm = transforms.Compose([
             transforms.ToTensor(),
@@ -147,7 +148,8 @@ class TextDataset(data.Dataset):
         df_filenames = \
             pd.read_csv(filepath, delim_whitespace=True, header=None)
         filenames = df_filenames[1].tolist()
-        print('Total filenames: ', len(filenames))
+        if self.stdout:
+            print('Total filenames: ', len(filenames))
         #
         filename_bbox = {img_file[:-4]: [] for img_file in filenames}
         numImgs = len(filenames)
@@ -250,13 +252,15 @@ class TextDataset(data.Dataset):
                 print('Save to: ', filepath)
         else:
             with open(filepath, 'rb') as f:
-                print("filepath", filepath)
+                if self.stdout:
+                    print("filepath", filepath)
                 x = pickle.load(f)
                 train_captions, test_captions = x[0], x[1]
                 ixtoword, wordtoix = x[2], x[3]
                 del x
                 n_words = len(ixtoword)
-                print('Load from: ', filepath)
+                if self.stdout:
+                    print('Load from: ', filepath)
         if split == 'train':
             # a list of list: each list contains
             # the indices of words in a sentence
@@ -280,7 +284,9 @@ class TextDataset(data.Dataset):
         if os.path.isfile(filepath):
             with open(filepath, 'rb') as f:
                 filenames = pickle.load(f)
-            print('Load filenames from: %s (%d)' % (filepath, len(filenames)))
+            if self.stdout:
+                print('Load filenames from: %s (%d)' %
+                      (filepath, len(filenames)))
         else:
             filenames = []
         return filenames

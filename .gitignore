@@ -1,0 +1,7 @@
+*.out
+*.bash
+*.sh
+*.ipynb
+*.idea
+*.vscode
+*/__pycache__
