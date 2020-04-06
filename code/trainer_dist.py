@@ -12,7 +12,7 @@ from torch.nn import SyncBatchNorm
 from PIL import Image
 
 from miscc.config import cfg
-from miscc.utils import mkdir_p
+from miscc.utils import mkdir_p, apply_running_mean
 from miscc.utils import build_super_images, build_super_images2
 from miscc.utils import weights_init, load_params, copy_G_params
 from model import G_DCGAN, G_NET, DCM_Net
@@ -28,6 +28,7 @@ import os
 import time
 import numpy as np
 import sys
+from copy import deepcopy
 
 
 class condGANTrainer(object):
@@ -194,11 +195,13 @@ class condGANTrainer(object):
 
         return real_labels, fake_labels, match_labels
 
-    def save_model(self, avg_param_G, netsD, epoch):
+    def save_model(self, avg_dict_G, netsD, epoch):
         # if self.gpu != 0:
         #     return
         print('GPU: {} start save G'.format(self.gpu))
-        torch.save([p for p in avg_param_G],
+        # torch.save([p for p in avg_param_G],
+                #    '%s/netG_epoch_%d.pth' % (self.model_dir, epoch))
+        torch.save(avg_dict_G,
                    '%s/netG_epoch_%d.pth' % (self.model_dir, epoch))
 
         print('GPU: {} start save D'.format(self.gpu))
@@ -256,9 +259,9 @@ class condGANTrainer(object):
                 im.save(fullpath)
             netG.train()
 
-        '''
         # save the real images
-        for k in range(8):
+        nvis = min(len(real_imgs[-1]), 8)
+        for k in range(nvis):
             im = real_imgs[-1][k].data.cpu().numpy()
             im = (im + 1.0) * 127.5
             im = im.astype(np.uint8)
@@ -267,7 +270,6 @@ class condGANTrainer(object):
             fullpath = '%s/R_%s_%d_%d.png'\
                     % (self.image_dir, name, gen_iterations, k)
             im.save(fullpath)
-        '''
 
     def train(self):
         text_encoder = self.text_encoder
@@ -277,7 +279,7 @@ class condGANTrainer(object):
         start_epoch = self.start_epoch
         VGG = self.VGG
         optimizerG, optimizersD = self.optG, self.optD
-        avg_param_G = copy_G_params(netG)
+        avg_dict_G = deepcopy(netG.state_dict())
         real_labels, fake_labels, match_labels = self.prepare_labels()
 
         batch_size = self.batch_size
@@ -387,13 +389,18 @@ class condGANTrainer(object):
                 errG_total.backward()
                 optimizerG.step()
 
-                for p, avg_p in zip(netG.parameters(), avg_param_G):
-                    avg_p.mul_(0.999).add_(0.001, p.data)
+                # for p, avg_p in zip(netG.parameters(), avg_param_G):
+                #     avg_p.mul_(0.999).add_(0.001, p.data)
+
+                avg_dict_G = apply_running_mean(netG.state_dict(), avg_dict_G)
 
                 if gen_iterations % 100 == 0 and self.gpu == 0:
-                    print(D_logs + '\n' + G_logs)
+                    step_log = '[%d/%d] ' % (step, self.num_batches)
+                    logs = step_log + D_logs + '\n' + step_log + G_logs
+                    # print(D_logs + '\n' + G_logs)
+                    print(logs)
                 # save images
-                if gen_iterations % 10 == 1000:
+                if gen_iterations % 1000 == 0:
                     self.save_img_results(netG, fixed_noise, sent_emb,
                                           words_embs, mask, image_encoder,
                                           captions, cap_lens, epoch, cnn_code,
@@ -403,10 +410,10 @@ class condGANTrainer(object):
             end_t = time.time()
             if self.gpu == 0:
                 print('''[%d/%d][%d] Loss_D: %.2f Loss_G: %.2f Time: %.2fs'''
-                      % (epoch, self.max_epoch, self.num_batches,
+                      % (epoch+1, self.max_epoch, self.num_batches,
                          errD_total, errG_total, end_t - start_t), end='\n')
 
-            if epoch % cfg.TRAIN.SNAPSHOT_INTERVAL == 0 and self.gpu == 0:
-                self.save_model(avg_param_G, netsD, epoch)
+            if epoch % cfg.TRAIN.SNAPSHOT_INTERVAL == 0:
+                self.save_model(avg_dict_G, netsD, epoch)
 
-        self.save_model(netG, avg_param_G, netsD, self.max_epoch)
+        self.save_model(avg_dict_G, netsD, self.max_epoch)

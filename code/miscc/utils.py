@@ -308,6 +308,22 @@ def copy_G_params(model):
     return flatten
 
 
+def isBN(key):
+    bnKeys = ['running_mean', 'running_var', 'num_batches_tracked']
+    return any([bnk in key for bnk in bnKeys])
+
+
+def apply_running_mean(curr_dict, avg_dict):
+    assert curr_dict.keys() == avg_dict.keys()
+    keys = curr_dict.keys()
+    for k in keys:
+        if isBN(k):
+            avg_dict[k] = curr_dict[k].data
+        else:
+            avg_dict[k] = avg_dict[k].mul_(0.999).add_(0.001, curr_dict[k].data)
+    return avg_dict
+
+
 def mkdir_p(path):
     try:
         os.makedirs(path)

@@ -26,6 +26,9 @@ import time
 import numpy as np
 import sys
 
+# TODO for debug new function
+from miscc.utils import apply_running_mean
+
 
 class condGANTrainer(object):
     def __init__(self, output_dir, data_loader, n_words, ixtoword):
@@ -240,6 +243,10 @@ class condGANTrainer(object):
     def train(self):
         text_encoder, image_encoder, netG, netsD, start_epoch, VGG = self.build_models()
         avg_param_G = copy_G_params(netG)
+
+        # from copy import deepcopy
+        # avg_dict_G = deepcopy(netG.state_dict())  # FIXME for debug
+
         optimizerG, optimizersD = self.define_optimizers(netG, netsD)
         real_labels, fake_labels, match_labels = self.prepare_labels()
 
