@@ -28,7 +28,7 @@ else:
 
 def prepare_data(data):
     imgs, captions, captions_lens, class_ids, keys, wrong_caps, \
-     wrong_caps_len, wrong_cls_id = data
+        wrong_caps_len, wrong_cls_id = data
 
     # sort data by the length in a decreasing order
     sorted_cap_lens, sorted_cap_indices = \
@@ -38,7 +38,7 @@ def prepare_data(data):
     for i in range(len(imgs)):
         imgs[i] = imgs[i][sorted_cap_indices]
         if cfg.CUDA:
-            real_imgs.append(Variable(imgs[i]).cuda())
+            real_imgs.append(Variable(imgs[i]).cuda(non_blocking=True))
         else:
             real_imgs.append(Variable(imgs[i]))
 
@@ -47,8 +47,8 @@ def prepare_data(data):
     keys = [keys[i] for i in sorted_cap_indices.numpy()]
 
     if cfg.CUDA:
-        captions = Variable(captions).cuda()
-        sorted_cap_lens = Variable(sorted_cap_lens).cuda()
+        captions = Variable(captions).cuda(non_blocking=True)
+        sorted_cap_lens = Variable(sorted_cap_lens).cuda(non_blocking=True)
     else:
         captions = Variable(captions)
         sorted_cap_lens = Variable(sorted_cap_lens)
@@ -61,8 +61,8 @@ def prepare_data(data):
     wrong_cls_id = wrong_cls_id[w_sorted_cap_indices].numpy()
 
     if cfg.CUDA:
-        wrong_caps = Variable(wrong_caps).cuda()
-        w_sorted_cap_lens = Variable(w_sorted_cap_lens).cuda()
+        wrong_caps = Variable(wrong_caps).cuda(non_blocking=True)
+        w_sorted_cap_lens = Variable(w_sorted_cap_lens).cuda(non_blocking=True)
     else:
         wrong_caps = Variable(wrong_caps)
         w_sorted_cap_lens = Variable(w_sorted_cap_lens)
@@ -87,7 +87,7 @@ def get_imgs(img_path, imsize, flip, x, y, bbox=None,
 
     if transform is not None:
         img = transform(img)
-        ## crop
+        # crop
         img = img.crop([x, y, x + 256, y + 256])
         if flip:
             img = F.hflip(img)

@@ -31,7 +31,8 @@ def sent_loss(cnn_code, rnn_code, labels, class_ids,
             masks.append(mask.reshape((1, -1)))
         masks = np.concatenate(masks, 0)
         # masks: batch_size x batch_size
-        masks = torch.ByteTensor(masks)
+        # masks = torch.ByteTensor(masks)
+        masks = torch.BoolTensor(masks)
         if cfg.CUDA:
             masks = masks.cuda()
 
@@ -98,7 +99,8 @@ def words_loss(img_features, words_emb, labels,
     similarities = torch.cat(similarities, 1)
     if class_ids is not None:
         masks = np.concatenate(masks, 0)
-        masks = torch.ByteTensor(masks)
+        # masks = torch.ByteTensor(masks)
+        masks = torch.BoolTensor(masks)
         if cfg.CUDA:
             masks = masks.cuda()
 
@@ -149,7 +151,7 @@ def discriminator_loss(netD, real_imgs, fake_imgs, conditions,
     region_features_real, cnn_code_real = image_encoder(real_imgs)
 
     real_result = word_level_correlation(region_features_real, words_embs,
-                                        cap_lens, batch_size, class_ids, real_labels)
+                                         cap_lens, batch_size, class_ids, real_labels)
 
     w_real = word_level_correlation(region_features_real, w_words_embs, wrong_caps_len,
                                             batch_size, wrong_cls_id, fake_labels)
@@ -219,8 +221,8 @@ def generator_loss(netsD, image_encoder, fake_imgs, real_labels,
 
 
 def DCM_generator_loss(netD, image_encoder, fake_img, real_labels,
-                   words_embs, sent_emb, match_labels,
-                   cap_lens, class_ids, VGG, real_img):
+                       words_embs, sent_emb, match_labels,
+                       cap_lens, class_ids, VGG, real_img):
 
     batch_size = real_labels.size(0)
     logs = ''
@@ -231,7 +233,7 @@ def DCM_generator_loss(netD, image_encoder, fake_img, real_labels,
     features = netD(fake_img)
     cond_logits = netD.COND_DNET(features, sent_emb)
     cond_errG = nn.BCELoss()(cond_logits, real_labels)
-    if netD.UNCOND_DNET is  not None:
+    if netD.UNCOND_DNET is not None:
         logits = netD.UNCOND_DNET(features)
         errG = nn.BCELoss()(logits, real_labels)
         g_loss = errG + cond_errG
@@ -274,10 +276,10 @@ def KL_loss(mu, logvar):
 ##################################################################
 
 def word_level_correlation(img_features, words_emb,
-               cap_lens, batch_size, class_ids, labels):
+                           cap_lens, batch_size, class_ids, labels):
 
     masks = []
-    att_maps = []
+    # att_maps = []
     result = 0
     cap_lens = cap_lens.data.tolist()
     similar_list = []
@@ -293,13 +295,12 @@ def word_level_correlation(img_features, words_emb,
 
         weiContext, attn = func_attention(word, context, cfg.TRAIN.SMOOTH.GAMMA1)
 
-        aver = torch.mean(word,2)
+        aver = torch.mean(word, 2)
         averT = aver.unsqueeze(1)
         res_word = torch.bmm(averT, word)
         res_softmax = F.softmax(res_word, 2)
         res_softmax = res_softmax.repeat(1, weiContext.size(1), 1)
         self_weiContext = weiContext * res_softmax
-
 
         word = word.transpose(1, 2).contiguous()
         self_weiContext = self_weiContext.transpose(1, 2).contiguous()
@@ -312,7 +313,7 @@ def word_level_correlation(img_features, words_emb,
         row_sim.mul_(cfg.TRAIN.SMOOTH.GAMMA2).exp_()
         row_sim = row_sim.sum(dim=1, keepdim=True)
         row_sim = torch.log(row_sim)
-        similar_list.append(F.sigmoid(row_sim[0,0]))
+        similar_list.append(F.sigmoid(row_sim[0, 0]))
 
     similar_list = torch.tensor(similar_list, requires_grad=False).cuda()
     result = nn.BCELoss()(similar_list, labels)

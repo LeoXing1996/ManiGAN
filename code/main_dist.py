@@ -20,7 +20,7 @@ import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
 from PIL import Image
 from torch.autograd import Variable
-import numpy.random as random
+import numpy.random
 
 dir_path = (os.path.abspath(os.path.join(os.path.realpath(__file__), './.')))
 sys.path.append(dir_path)
@@ -36,6 +36,7 @@ def parse_args():
     parser.add_argument('--manualSeed', type=int, help='manual seed')
     parser.add_argument('--name', type=str, help='name for output dir')
     parser.add_argument('--bz', type=int, help='batch size for training')
+    parser.add_argument('--thread', type=int, help='thread for dataloader')
     parser.add_argument('--epoch', type=int, help='max epoch for training')
     parser.add_argument('--ngpus', default=4, type=int, help='number of gpus')
     parser.add_argument('--local_rank', default=-1, type=int,
@@ -59,6 +60,9 @@ def main():
         cfg.TRAIN.BATCH_SIZE_PER_GPU = args.bz // args.ngpus
         cfg.N_GPUS = args.ngpus
 
+    if args.thread is not None:
+        cfg.WORKERS = args.thread
+
     if args.manualSeed is None:
         args.manualSeed = random.randint(1, 10000)
     random.seed(args.manualSeed)
@@ -72,9 +76,26 @@ def main():
 
     rank = args.local_rank
     if rank == 0:
+        # save path
+        now = datetime.datetime.now(dateutil.tz.tzlocal())
+        timestamp = now.strftime('%Y_%m_%d_%H_%M_%S')
+        if args.name is None:
+            output_dir = '../output/%s_%s_%s' % \
+                (cfg.DATASET_NAME, cfg.CONFIG_NAME, timestamp)
+        else:
+            output_dir = '../output/%s_%s_%s_%s' % \
+                (cfg.DATASET_NAME, cfg.CONFIG_NAME, args.name, timestamp)
+        cfg.OUTPUT_DIR = output_dir
+
         print('Using config:')
         pprint.pprint(cfg)
-    model_worker(rank, args.ngpus, args)
+
+    try:
+        model_worker(rank, args.ngpus, args)
+    except KeyboardInterrupt:
+        if rank == 0:
+            print('KeyboardInterrupt, Stop Running')
+        dist.destroy_process_group()
 
 
 def getDataLoader(rank):
@@ -100,42 +121,15 @@ def getDataLoader(rank):
 def model_worker(gpu, ngpus_per_node, args):
     dist.init_process_group(backend='nccl')
 
-    now = datetime.datetime.now(dateutil.tz.tzlocal())
-    timestamp = now.strftime('%Y_%m_%d_%H_%M_%S')
-    if args.name is None:
-        output_dir = '../output/%s_%s_%s' % \
-                     (cfg.DATASET_NAME, cfg.CONFIG_NAME, timestamp)
-    else:
-        output_dir = '../output/%s_%s_%s_%s' % \
-                     (cfg.DATASET_NAME, cfg.CONFIG_NAME, args.name, timestamp)
-
     dataloader, n_words, ixtoword = getDataLoader(gpu)
     start_t = time.time()
-    algo = trainer(output_dir, dataloader, n_words, ixtoword, gpu)
+    algo = trainer(dataloader, n_words, ixtoword)
     algo.train()
     end_t = time.time()
+    dist.barrier()
     if gpu == 0:
         print('Total time for training:', end_t - start_t)
 
 
 if __name__ == "__main__":
     main()
-
-    # now = datetime.datetime.now(dateutil.tz.tzlocal())
-    # timestamp = now.strftime('%Y_%m_%d_%H_%M_%S')
-    # if args.name is None:
-    #     output_dir = '../output/%s_%s_%s' % \
-    #                  (cfg.DATASET_NAME, cfg.CONFIG_NAME, timestamp)
-    # else:
-    #     output_dir = '../output/%s_%s_%s_%s' % \
-    #                  (cfg.DATASET_NAME, cfg.CONFIG_NAME, args.name, timestamp)
-
-    # # Define models and go to train/evaluate
-    # algo = trainer(output_dir, dataloader, dataset.n_words, dataset.ixtoword)
-    # start_t = time.time()
-    # if cfg.TRAIN.FLAG:
-    #     algo.train()
-    # else:
-    #     print('Not support for Distributed Validation')
-    # end_t = time.time()
-    # print('Total time for training:', end_t - start_t)

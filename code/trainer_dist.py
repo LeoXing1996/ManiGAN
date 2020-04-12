@@ -7,6 +7,7 @@ import torch.optim as optim
 from torch.autograd import Variable
 import torch.backends.cudnn as cudnn
 from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 from torch.nn import SyncBatchNorm
 
 from PIL import Image
@@ -32,12 +33,13 @@ from copy import deepcopy
 
 
 class condGANTrainer(object):
-    def __init__(self, output_dir, data_loader, n_words, ixtoword, gpu=-1):
-        torch.cuda.set_device(gpu)
+    def __init__(self, data_loader, n_words, ixtoword):
+        self.gpu = dist.get_rank()
+        torch.cuda.set_device(self.gpu)
         cudnn.benchmark = True
-        self.gpu = gpu
 
         if cfg.TRAIN.FLAG:
+            output_dir = cfg.OUTPUT_DIR
             self.model_dir = os.path.join(output_dir, 'Model', 'GPU'+str(self.gpu))
             self.image_dir = os.path.join(output_dir, 'Image', 'GPU'+str(self.gpu))
             mkdir_p(self.model_dir)
@@ -51,10 +53,8 @@ class condGANTrainer(object):
         self.ixtoword = ixtoword
         self.data_loader = data_loader
         self.num_batches = len(self.data_loader)
-        self.text_encoder, \
-        self.image_encoder, \
-        self.netG, self.netsD, \
-        self.start_epoch, self.VGG = self.build_models()
+        self.text_encoder, self.image_encoder, \
+            self.netG, self.netsD, self.start_epoch, self.VGG = self.build_models()
         self.optG, self.optD = self.define_optimizers(self.netG, self.netsD)
 
     def build_models(self):
@@ -200,7 +200,7 @@ class condGANTrainer(object):
         #     return
         print('GPU: {} start save G'.format(self.gpu))
         # torch.save([p for p in avg_param_G],
-                #    '%s/netG_epoch_%d.pth' % (self.model_dir, epoch))
+        # '%s/netG_epoch_%d.pth' % (self.model_dir, epoch))
         torch.save(avg_dict_G,
                    '%s/netG_epoch_%d.pth' % (self.model_dir, epoch))
 
@@ -209,14 +209,14 @@ class condGANTrainer(object):
             netD = netsD[i]
             torch.save(netD.module.state_dict(),
                        '%s/netD%d_epoch_%d.pth' % (self.model_dir, i, epoch))
-        print('Save G/Ds models.')
+        print('Save G/Ds models of GPU: {}.'.format(self.gpu))
 
     def save_img_results(self, netG, noise, sent_emb, words_embs, mask,
                          image_encoder, captions, cap_lens,
                          gen_iterations, cnn_code, region_features,
                          real_imgs, name='current'):
         # Save images
-        print('run inference on gpu: ', self.gpu)
+        print('run inference on GPU: ', self.gpu)
         with torch.no_grad():
             netG.eval()
             fake_imgs, attention_maps, _, _, _, _ = netG(noise, sent_emb,
@@ -251,7 +251,7 @@ class condGANTrainer(object):
                                         None, self.batch_size)
             img_set, _ = \
                 build_super_images(fake_imgs[i].detach().cpu(),
-                                captions, self.ixtoword, att_maps, att_sze)
+                                   captions, self.ixtoword, att_maps, att_sze)
             if img_set is not None:
                 im = Image.fromarray(img_set)
                 fullpath = '%s/D_%s_%d.png'\
@@ -291,6 +291,7 @@ class condGANTrainer(object):
 
         gen_iterations = 0
         for epoch in range(start_epoch, self.max_epoch):
+            self.data_loader.sampler.set_epoch(epoch)
             start_t = time.time()
 
             data_iter = iter(self.data_loader)
@@ -395,7 +396,8 @@ class condGANTrainer(object):
                 avg_dict_G = apply_running_mean(netG.state_dict(), avg_dict_G)
 
                 if gen_iterations % 100 == 0 and self.gpu == 0:
-                    step_log = '[%d/%d] ' % (step, self.num_batches)
+                    step_log = '[%d/%d][%d/%d] ' % (epoch+1, self.max_epoch,
+                                                    step, self.num_batches)
                     logs = step_log + D_logs + '\n' + step_log + G_logs
                     # print(D_logs + '\n' + G_logs)
                     print(logs)
@@ -406,14 +408,58 @@ class condGANTrainer(object):
                                           captions, cap_lens, epoch, cnn_code,
                                           region_features, imgs,
                                           name='current')
+                    dist.barrier()
 
             end_t = time.time()
             if self.gpu == 0:
                 print('''[%d/%d][%d] Loss_D: %.2f Loss_G: %.2f Time: %.2fs'''
                       % (epoch+1, self.max_epoch, self.num_batches,
                          errD_total, errG_total, end_t - start_t), end='\n')
+                # print('''[%d/%d][%d] Loss_D: %.2f Loss_G: %.2f'''
+                #       % (epoch+1, self.max_epoch, self.num_batches,
+                #          errD_total, errG_total), end='\n')
+            dist.barrier()
 
             if epoch % cfg.TRAIN.SNAPSHOT_INTERVAL == 0:
                 self.save_model(avg_dict_G, netsD, epoch)
+                dist.barrier()  # make sure all model finish saving
 
         self.save_model(avg_dict_G, netsD, self.max_epoch)
+        dist.barrier()
+
+    def train_noupdate(self):
+        text_encoder = self.text_encoder
+        image_encoder = self.image_encoder
+        netG = self.netG
+        netsD = self.netsD
+        start_epoch = self.start_epoch
+        real_labels, fake_labels, match_labels = self.prepare_labels()
+
+        batch_size = self.batch_size
+        nz = cfg.GAN.Z_DIM
+        noise = Variable(torch.FloatTensor(batch_size, nz))
+        fixed_noise = Variable(torch.FloatTensor(batch_size, nz).normal_(0, 1))
+
+        noise, fixed_noise = noise.cuda(), fixed_noise.cuda()
+
+        gen_iterations = 0
+        for epoch in range(start_epoch, self.max_epoch):
+            data_iter = iter(self.data_loader)
+            dist.barrier()
+            step = 0
+            while step < self.num_batches:
+
+                data = data_iter.next()
+                dist.barrier()
+                imgs, captions, cap_lens, class_ids, keys, wrong_caps, \
+                    wrong_caps_len, wrong_cls_id = prepare_data(data)
+                dist.barrier()
+                step += 1
+                gen_iterations += 1
+
+                if gen_iterations % 100 == 0:
+                    print('GPU: %d [%d/%d][%d/%d]' % (self.gpu, epoch+1, self.max_epoch, step, self.num_batches))
+
+            print('''GPU: %d[%d/%d][%d]'''
+                  % (self.gpu, epoch+1, self.max_epoch, self.num_batches), end='\n')
+        dist.barrier()

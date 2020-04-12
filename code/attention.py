@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from miscc.config import cfg
 
 
 def conv1x1(in_planes, out_planes):
@@ -25,10 +26,10 @@ def func_attention(query, context, gamma1):
     # Get attention
     # (batch x sourceL x ndf)(batch x ndf x queryL)
     # -->batch x sourceL x queryL
-    attn = torch.bmm(contextT, query) 
+    attn = torch.bmm(contextT, query)
     # --> batch*sourceL x queryL
     attn = attn.view(batch_size*sourceL, queryL)
-    attn = nn.Softmax()(attn)  
+    attn = nn.Softmax()(attn)
 
     # --> batch x sourceL x queryL
     attn = attn.view(batch_size, sourceL, queryL)
@@ -45,7 +46,6 @@ def func_attention(query, context, gamma1):
     # (batch x ndf x sourceL)(batch x sourceL x queryL)
     # --> batch x ndf x queryL
     weightedContext = torch.bmm(context, attnT)
-
 
     return weightedContext, attn.view(batch_size, -1, ih, iw)
 
@@ -88,10 +88,10 @@ class SpatialAttentionGeneral(nn.Module):
         if self.mask is not None:
             # batch_size x sourceL --> batch_size*queryL x sourceL
             mask = self.mask.repeat(queryL, 1)
-            attn.data.masked_fill_(mask.data, -float('inf'))
+            attn.data.masked_fill_(mask.type(torch.cuda.BoolTensor), -float('inf'))
 
-        ## make the softmax on the dimension 1
-        attn = self.sm(attn)  
+        # make the softmax on the dimension 1
+        attn = self.sm(attn)
         # --> batch x queryL x sourceL
         attn = attn.view(batch_size, queryL, sourceL)
         # --> batch x sourceL x queryL
@@ -104,6 +104,7 @@ class SpatialAttentionGeneral(nn.Module):
         attn = attn.view(batch_size, -1, ih, iw)
 
         return weightedContext, attn
+
 
 class ChannelAttention(nn.Module):
     def __init__(self, idf, cdf):
@@ -119,15 +120,15 @@ class ChannelAttention(nn.Module):
         sourceC = context.unsqueeze(3)
 
         if (ih == 64):
-            sourceC = self.conv_context2(sourceC).squeeze(3) 
+            sourceC = self.conv_context2(sourceC).squeeze(3)
         else:
-            sourceC = self.conv_context3(sourceC).squeeze(3) 
+            sourceC = self.conv_context3(sourceC).squeeze(3)
 
         attn_c = torch.bmm(weightedContext, sourceC)
         attn_c = attn_c.view(batch_size * self.idf, sourceL)
         attn_c = self.sm(attn_c)
         attn_c = attn_c.view(batch_size, self.idf, sourceL)
-        
+
         attn_c = torch.transpose(attn_c, 1, 2).contiguous()
 
         weightedContext_c = torch.bmm(sourceC, attn_c)
@@ -135,6 +136,7 @@ class ChannelAttention(nn.Module):
         weightedContext_c = weightedContext_c.view(batch_size, -1, ih, iw)
 
         return weightedContext_c, attn_c
+
 
 class DCMChannelAttention(nn.Module):
     def __init__(self, idf, cdf):
@@ -153,7 +155,7 @@ class DCMChannelAttention(nn.Module):
         attn_c = attn_c.view(batch_size * self.idf, sourceL)
         attn_c = self.sm(attn_c)
         attn_c = attn_c.view(batch_size, self.idf, sourceL)
-        
+
         attn_c = torch.transpose(attn_c, 1, 2).contiguous()
 
         weightedContext_c = torch.bmm(sourceC, attn_c)
@@ -161,6 +163,3 @@ class DCMChannelAttention(nn.Module):
         weightedContext_c = weightedContext_c.view(batch_size, -1, ih, iw)
 
         return weightedContext_c, attn_c
-
-
-
