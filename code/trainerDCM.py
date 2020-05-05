@@ -171,7 +171,7 @@ class condGANTrainer(object):
 
     def save_img_results(self, netG, noise, sent_emb, words_embs, mask,
                          image_encoder, captions, cap_lens,
-                         gen_iterations, cnn_code, region_features, 
+                         gen_iterations, cnn_code, region_features,
                          real_imgs, netDCM, real_features, name='current'):
         # Save images
         fake_imgs, attention_maps, _, _, h_code, c_code = netG(noise, sent_emb,
@@ -305,9 +305,9 @@ class condGANTrainer(object):
                 D_logs = ''
 
                 netD.zero_grad()
-                errD = discriminator_loss(netD, imgs[cfg.TREE.BRANCH_NUM - 1], 
+                errD = discriminator_loss(netD, imgs[cfg.TREE.BRANCH_NUM - 1],
                                         fake_img, sent_emb, real_labels, fake_labels,
-                                        words_embs, cap_lens, image_encoder, class_ids, 
+                                        words_embs, cap_lens, image_encoder, class_ids,
                                         w_words_embs, wrong_caps_len, wrong_cls_id)
                 errD.backward()
                 optimizerD.step()
@@ -351,7 +351,7 @@ class condGANTrainer(object):
                      errD, errC_total,
                      end_t - start_t))
 
-            if epoch % cfg.TRAIN.SNAPSHOT_INTERVAL == 0:  
+            if epoch % cfg.TRAIN.SNAPSHOT_INTERVAL == 0:
                 self.save_model(netDCM, avg_param_C, netD, epoch)
 
         self.save_model(netDCM, avg_param_C, netD, self.max_epoch)
@@ -440,7 +440,7 @@ class condGANTrainer(object):
             mkdir_p(save_dir)
 
             cnt = 0
-            idx = 0 
+            idx = 0
             for _ in range(5):  # (cfg.TEXT.CAPTIONS_PER_IMAGE):
                 for step, data in enumerate(self.data_loader, 0):
                     cnt += batch_size
@@ -474,7 +474,7 @@ class condGANTrainer(object):
                     noise.data.normal_(0, 1)
                     fake_imgs, attention_maps, mu, logvar, h_code, c_code = netG(noise,
                                      sent_emb, words_embs, mask, cnn_code, region_features)
-                    
+
                     real_img = imgs[cfg.TREE.BRANCH_NUM - 1]
                     real_features = VGG(real_img)[0]
 
@@ -562,7 +562,7 @@ class condGANTrainer(object):
 
                 captions = captions.cuda()
                 cap_lens = cap_lens.cuda()
-                for i in range(1):  
+                for i in range(1):
                     noise = Variable(torch.FloatTensor(batch_size, nz), volatile=True)
                     noise = noise.cuda()
 
@@ -570,7 +570,7 @@ class condGANTrainer(object):
                     # (1) Extract text and image embeddings
                     ######################################################
                     hidden = text_encoder.init_hidden(batch_size)
-                    
+
                     # The text embeddings
                     words_embs, sent_emb = text_encoder(captions, cap_lens, hidden)
 
@@ -585,7 +585,7 @@ class condGANTrainer(object):
                     noise.data.normal_(0, 1)
                     fake_imgs, attention_maps, mu, logvar, h_code, c_code = netG(noise,
                                      sent_emb, words_embs, mask, cnn_code, region_features)
-                    
+
                     real_img = imgs[cfg.TREE.BRANCH_NUM - 1].unsqueeze(0)
                     real_features = VGG(real_img)[0]
 

@@ -85,8 +85,9 @@ def main():
         else:
             output_dir = '../output/%s_%s_%s_%s' % \
                 (cfg.DATASET_NAME, cfg.CONFIG_NAME, args.name, timestamp)
-        cfg.OUTPUT_DIR = output_dir
+    cfg.OUTPUT_DIR = output_dir
 
+    if rank == 0:
         print('Using config:')
         pprint.pprint(cfg)
 
